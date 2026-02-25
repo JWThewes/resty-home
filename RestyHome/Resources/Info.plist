@@ -20,6 +20,8 @@
     <string>$(CURRENT_PROJECT_VERSION)</string>
     <key>MinimumOSVersion</key>
     <string>17.0</string>
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.utilities</string>
     <key>LSUIElement</key>
     <true/>
     <key>UIApplicationSceneManifest</key>
@@ -27,6 +29,8 @@
         <key>UIApplicationSupportsMultipleScenes</key>
         <false/>
     </dict>
+    <key>ITSAppUsesNonExemptEncryption</key>
+    <false/>
     <key>NSHomeKitUsageDescription</key>
     <string>RestyHome needs access to your HomeKit devices to expose them via a local REST API.</string>
 </dict>
