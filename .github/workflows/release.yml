@@ -74,37 +74,21 @@ jobs:
             -scheme "$SCHEME" \
             -configuration "$CONFIGURATION" \
             -destination "$DESTINATION" \
-            -archivePath "$RUNNER_TEMP/RestyHome.xcarchive" \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
             MARKETING_VERSION="${{ steps.version.outputs.version }}" \
             DEVELOPMENT_TEAM="${{ secrets.APPLE_TEAM_ID }}" \
             CODE_SIGN_IDENTITY="Developer ID Application" \
-            CODE_SIGN_STYLE=Manual \
-            archive
+            CODE_SIGN_STYLE=Automatic \
+            CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO \
+            build
 
-      - name: Export archive
+      - name: Prepare app for distribution
         run: |
-          # Create export options plist
-          cat > "$RUNNER_TEMP/ExportOptions.plist" << 'PLIST'
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-              <key>method</key>
-              <string>developer-id</string>
-              <key>teamID</key>
-              <string>${{ secrets.APPLE_TEAM_ID }}</string>
-              <key>signingStyle</key>
-              <string>manual</string>
-              <key>signingCertificate</key>
-              <string>Developer ID Application</string>
-          </dict>
-          </plist>
-          PLIST
+          APP_PATH="$RUNNER_TEMP/DerivedData/Build/Products/Release-maccatalyst/RestyHome.app"
 
-          xcodebuild -exportArchive \
-            -archivePath "$RUNNER_TEMP/RestyHome.xcarchive" \
-            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
-            -exportPath "$RUNNER_TEMP/export"
+          # Verify the app exists and is signed
+          codesign -dvv "$APP_PATH" 2>&1
+          echo "APP_PATH=$APP_PATH" >> "$GITHUB_ENV"
 
       - name: Notarize app
         env:
@@ -112,8 +96,6 @@ jobs:
           APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          APP_PATH="$RUNNER_TEMP/export/RestyHome.app"
-
           # Create a ZIP for notarization
           ditto -c -k --keepParent "$APP_PATH" "$RUNNER_TEMP/RestyHome-notarize.zip"
 
@@ -130,7 +112,6 @@ jobs:
 
       - name: Create DMG
         run: |
-          APP_PATH="$RUNNER_TEMP/export/RestyHome.app"
           DMG_PATH="$RUNNER_TEMP/RestyHome-${{ steps.version.outputs.version }}.dmg"
 
           # Create a temporary directory for the DMG contents
