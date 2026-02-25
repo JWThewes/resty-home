@@ -40,7 +40,6 @@ jobs:
           APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
         run: |
-          # Create a temporary keychain
           KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
           KEYCHAIN_PASSWORD="$(openssl rand -base64 32)"
 
@@ -48,7 +47,6 @@ jobs:
           security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 
-          # Import the certificate
           CERT_PATH="$RUNNER_TEMP/certificate.p12"
           echo "$APPLE_CERTIFICATE_P12" | base64 --decode > "$CERT_PATH"
           security import "$CERT_PATH" \
@@ -58,16 +56,13 @@ jobs:
             -f pkcs12 \
             -k "$KEYCHAIN_PATH"
 
-          # Set the keychain as the default and add to search list
           security list-keychains -d user -s "$KEYCHAIN_PATH" "$(security list-keychains -d user | tr -d '"' | tr '\n' ' ')"
           security default-keychain -s "$KEYCHAIN_PATH"
-
-          # Allow codesign to access the keychain without prompting
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 
           echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
 
-      - name: Build Mac Catalyst app
+      - name: Build unsigned Mac Catalyst app
         run: |
           xcodebuild \
             -project "$PROJECT" \
@@ -76,18 +71,33 @@ jobs:
             -destination "$DESTINATION" \
             -derivedDataPath "$RUNNER_TEMP/DerivedData" \
             MARKETING_VERSION="${{ steps.version.outputs.version }}" \
-            DEVELOPMENT_TEAM="${{ secrets.APPLE_TEAM_ID }}" \
-            CODE_SIGN_IDENTITY="Developer ID Application" \
-            CODE_SIGN_STYLE=Automatic \
-            CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO \
+            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_ENTITLEMENTS="" \
             build
 
-      - name: Prepare app for distribution
+      - name: Sign app with Developer ID
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           APP_PATH="$RUNNER_TEMP/DerivedData/Build/Products/Release-maccatalyst/RestyHome.app"
+          ENTITLEMENTS="RestyHome/Resources/RestyHome.entitlements"
+          IDENTITY="Developer ID Application: Jan Thewes ($APPLE_TEAM_ID)"
 
-          # Verify the app exists and is signed
-          codesign -dvv "$APP_PATH" 2>&1
+          # Sign all nested frameworks/dylibs first (if any), then the app itself
+          find "$APP_PATH" -type f \( -name "*.dylib" -o -name "*.framework" \) -print0 | while IFS= read -r -d '' lib; do
+            codesign --force --options runtime --timestamp --sign "$IDENTITY" "$lib"
+          done
+
+          # Sign the main app bundle with entitlements and hardened runtime
+          codesign --force --options runtime --timestamp \
+            --entitlements "$ENTITLEMENTS" \
+            --sign "$IDENTITY" \
+            "$APP_PATH"
+
+          # Verify
+          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
           echo "APP_PATH=$APP_PATH" >> "$GITHUB_ENV"
 
       - name: Notarize app
@@ -96,10 +106,8 @@ jobs:
           APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          # Create a ZIP for notarization
           ditto -c -k --keepParent "$APP_PATH" "$RUNNER_TEMP/RestyHome-notarize.zip"
 
-          # Submit for notarization
           xcrun notarytool submit "$RUNNER_TEMP/RestyHome-notarize.zip" \
             --apple-id "$APPLE_ID" \
             --password "$APPLE_ID_PASSWORD" \
@@ -107,20 +115,17 @@ jobs:
             --wait \
             --timeout 600
 
-          # Staple the notarization ticket
           xcrun stapler staple "$APP_PATH"
 
       - name: Create DMG
         run: |
           DMG_PATH="$RUNNER_TEMP/RestyHome-${{ steps.version.outputs.version }}.dmg"
 
-          # Create a temporary directory for the DMG contents
           DMG_STAGING="$RUNNER_TEMP/dmg-staging"
           mkdir -p "$DMG_STAGING"
           cp -R "$APP_PATH" "$DMG_STAGING/"
           ln -s /Applications "$DMG_STAGING/Applications"
 
-          # Create the DMG
           hdiutil create \
             -volname "RestyHome ${{ steps.version.outputs.version }}" \
             -srcfolder "$DMG_STAGING" \
@@ -128,7 +133,6 @@ jobs:
             -format UDZO \
             "$DMG_PATH"
 
-          # Notarize the DMG too
           xcrun notarytool submit "$DMG_PATH" \
             --apple-id "${{ secrets.APPLE_ID }}" \
             --password "${{ secrets.APPLE_ID_PASSWORD }}" \
